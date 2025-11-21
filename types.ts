@@ -5,7 +5,6 @@ export interface AnimationFrame {
 
 export enum AppState {
   IDLE = 'IDLE',
-  ANALYZING = 'ANALYZING',
   READY_TO_GENERATE = 'READY_TO_GENERATE',
   GENERATING = 'GENERATING',
   COMPLETE = 'COMPLETE',

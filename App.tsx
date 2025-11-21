@@ -1,75 +1,69 @@
 import React, { useState } from 'react';
 import { UploadZone } from './components/UploadZone';
 import { AnimationPreview } from './components/AnimationPreview';
-import { analyzeCharacterImage, generateSpriteSheet } from './services/geminiService';
+import { generateSpriteSheet } from './services/geminiService';
 import { sliceSpriteSheet } from './utils/imageUtils';
 import { AppState } from './types';
-import { Wand2, Zap, LayoutGrid, Layers, Settings2, ZoomIn, Loader2 } from 'lucide-react';
+import { Wand2, Zap, LayoutGrid, Loader2, RotateCcw } from 'lucide-react';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [originalImage, setOriginalImage] = useState<string | null>(null);
-  const [characterDescription, setCharacterDescription] = useState<string>("");
   const [actionPrompt, setActionPrompt] = useState<string>("");
   const [generatedFrames, setGeneratedFrames] = useState<string[]>([]);
   const [fps, setFps] = useState<number>(6); 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // New configuration states
-  const [frameCount, setFrameCount] = useState<number>(6); 
-  const [zoomLevel, setZoomLevel] = useState<number>(80); // Default 80%
+  // Configuration state - Default to 4 for stability
+  const [frameCount, setFrameCount] = useState<number>(4); 
 
   // Step 1: Handle Image Upload
-  const handleImageSelected = async (base64: string) => {
+  const handleImageSelected = (base64: string) => {
     setOriginalImage(base64);
-    setAppState(AppState.ANALYZING);
+    setAppState(AppState.READY_TO_GENERATE);
     setErrorMsg(null);
-    setCharacterDescription(""); // Clear previous description
-
-    try {
-      const description = await analyzeCharacterImage(base64);
-      setCharacterDescription(description);
-      setAppState(AppState.READY_TO_GENERATE);
-    } catch (err) {
-      console.error(err);
-      setErrorMsg("无法分析图片，请检查 API Key。您可以尝试直接生成。");
-      // Even if analysis fails, we let them proceed, just without the description enhancement
-      setAppState(AppState.READY_TO_GENERATE);
-    }
+    // Pre-fill a default action if empty to encourage user
+    if (!actionPrompt) setActionPrompt("闲置动作");
   };
 
   // Step 2: Generate Animation
   const handleGenerate = async () => {
-    if (!originalImage || !actionPrompt) return;
+    if (!originalImage) {
+        setErrorMsg("请先上传图片");
+        return;
+    }
+    if (!actionPrompt) {
+        setErrorMsg("请输入动作描述");
+        return;
+    }
 
     setAppState(AppState.GENERATING);
     setErrorMsg(null);
     setGeneratedFrames([]);
 
     // Calculate rows and cols based on frame count
+    // NOTE: This must match the logic in geminiService implicitly via params
     let rows = 2;
-    let cols = 2;
+    let cols = 2; // Default 4 frames (2x2)
+    
+    if (frameCount === 4) { rows = 2; cols = 2; }
     if (frameCount === 6) { rows = 2; cols = 3; }
     if (frameCount === 8) { rows = 2; cols = 4; }
     if (frameCount === 9) { rows = 3; cols = 3; }
-    // Custom handling for 4 frames could be 2x2
-    if (frameCount === 4) { rows = 2; cols = 2; }
 
     try {
       const spriteSheetBase64 = await generateSpriteSheet(
         originalImage,
-        characterDescription,
         actionPrompt,
         rows,
-        cols,
-        zoomLevel
+        cols
       );
 
-      // Slice the grid
+      // Slice the grid using Fixed Grid slicing
       const frames = await sliceSpriteSheet(spriteSheetBase64, rows, cols, true);
       
       if (!frames || frames.length === 0) {
-        throw new Error("生成的图像无法切分，请重试。");
+        throw new Error("图像处理失败，请重试。");
       }
 
       setGeneratedFrames(frames);
@@ -79,6 +73,13 @@ const App: React.FC = () => {
       setErrorMsg(err.message || "生成失败，请尝试不同的提示词。");
       setAppState(AppState.ERROR);
     }
+  };
+
+  const handleReset = () => {
+      setAppState(AppState.IDLE);
+      setGeneratedFrames([]);
+      setErrorMsg(null);
+      // Keep the image and prompt for easier retry
   };
 
   return (
@@ -117,14 +118,8 @@ const App: React.FC = () => {
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold flex items-center gap-2 text-gray-800 text-lg">
-                  <span className="bg-gray-100 text-gray-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">1</span>
                   上传角色图片
                 </h2>
-                {appState === AppState.ANALYZING && (
-                  <span className="text-xs text-lime-600 font-medium animate-pulse bg-lime-50 px-2 py-1 rounded flex items-center gap-1">
-                    <Loader2 size={12} className="animate-spin"/> AI 正在分析...
-                  </span>
-                )}
               </div>
               
               <UploadZone 
@@ -134,7 +129,6 @@ const App: React.FC = () => {
                   setOriginalImage(null);
                   setAppState(AppState.IDLE);
                   setGeneratedFrames([]);
-                  setCharacterDescription("");
                   setErrorMsg(null);
                 }}
               />
@@ -144,9 +138,13 @@ const App: React.FC = () => {
             <div className={`bg-white rounded-2xl p-6 shadow-sm border border-gray-100 transition-all duration-300 ${!originalImage ? 'opacity-50 pointer-events-none grayscale-[0.5]' : 'opacity-100'}`}>
                <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold flex items-center gap-2 text-gray-800 text-lg">
-                  <span className="bg-black text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">2</span>
                   动画设置
                 </h2>
+                {appState === AppState.ERROR && (
+                    <button onClick={handleReset} className="text-xs text-gray-500 flex items-center gap-1 hover:text-gray-800">
+                        <RotateCcw size={12} /> 重置状态
+                    </button>
+                )}
               </div>
 
               <div className="space-y-6">
@@ -158,7 +156,9 @@ const App: React.FC = () => {
                   <div className="relative">
                     <textarea
                       placeholder="例如：奔跑循环, 开心地跳跃, 施法动作"
-                      className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-lime-400 focus:border-lime-400 outline-none transition-all shadow-sm resize-none h-24"
+                      className={`w-full border rounded-xl px-4 py-3 outline-none transition-all shadow-sm resize-none h-24
+                        ${!actionPrompt && errorMsg ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-2 focus:ring-lime-400 focus:border-lime-400'}
+                      `}
                       value={actionPrompt}
                       onChange={(e) => setActionPrompt(e.target.value)}
                     />
@@ -190,7 +190,7 @@ const App: React.FC = () => {
                                 onChange={(e) => setFrameCount(Number(e.target.value))}
                                 className="w-full bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-xl focus:ring-lime-500 focus:border-lime-500 block p-2.5 outline-none appearance-none"
                             >
-                                <option value={4}>4 帧</option>
+                                <option value={4}>4 帧 (最稳定)</option>
                                 <option value={6}>6 帧</option>
                                 <option value={8}>8 帧</option>
                                 <option value={9}>9 帧</option>
@@ -214,42 +214,17 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Scale Control */}
-                <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                   <label className="block text-xs font-bold text-gray-500 uppercase mb-3 flex justify-between">
-                     <span className="flex items-center gap-1"><ZoomIn size={14} /> 画面主体缩放</span>
-                     <span className="text-gray-700">{zoomLevel}%</span>
-                   </label>
-                   <input 
-                     type="range" 
-                     min="50" 
-                     max="100" 
-                     step="5"
-                     value={zoomLevel} 
-                     onChange={(e) => setZoomLevel(Number(e.target.value))}
-                     className="w-full accent-gray-800 h-1.5 bg-gray-300 rounded-lg appearance-none cursor-pointer"
-                   />
-                   <div className="flex justify-between text-[10px] text-gray-400 mt-1 font-mono">
-                      <span>50%</span>
-                      <span>100%</span>
-                   </div>
-                </div>
-
                 <button
                   onClick={handleGenerate}
-                  disabled={appState === AppState.GENERATING || appState === AppState.ANALYZING || !actionPrompt}
+                  disabled={appState === AppState.GENERATING}
                   className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 mt-2 shadow-md transition-all transform active:scale-[0.99]
-                    ${(appState === AppState.GENERATING || appState === AppState.ANALYZING)
+                    ${(appState === AppState.GENERATING)
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200' 
                       : 'bg-lime-400 hover:bg-lime-500 text-black hover:shadow-lg hover:shadow-lime-200 border border-lime-400'}`}
                 >
                   {appState === AppState.GENERATING ? (
                     <>
                       <Loader2 size={20} className="animate-spin" /> 正在生成...
-                    </>
-                  ) : appState === AppState.ANALYZING ? (
-                    <>
-                       <Loader2 size={20} className="animate-spin" /> 等待分析完成...
                     </>
                   ) : (
                     <>
@@ -259,7 +234,7 @@ const App: React.FC = () => {
                 </button>
 
                 {errorMsg && (
-                  <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100 mt-2">
+                  <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100 mt-2 animate-pulse">
                     {errorMsg}
                   </div>
                 )}
@@ -273,7 +248,6 @@ const App: React.FC = () => {
              <div className="sticky top-24">
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="font-semibold flex items-center gap-2 text-gray-800 text-lg">
-                    <span className="bg-gray-100 text-gray-600 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">3</span>
                     生成结果
                     </h2>
                 </div>
@@ -283,19 +257,6 @@ const App: React.FC = () => {
                   fps={fps}
                   isLoading={appState === AppState.GENERATING}
                 />
-
-                {/* Instructions / Tips */}
-                <div className="mt-6 bg-white border border-gray-100 p-5 rounded-2xl shadow-sm">
-                   <h4 className="font-bold text-gray-800 text-sm mb-3 flex items-center gap-2 border-b border-gray-100 pb-2">
-                     <LayoutGrid size={16} className="text-lime-500"/> 提示
-                   </h4>
-                   <ul className="space-y-2 text-xs text-gray-500 leading-relaxed list-disc list-inside">
-                     <li>AI 会生成一张包含所有帧的拼图 (Sprite Sheet)。</li>
-                     <li>为了获得最佳效果，请使用简单的动作描述，如“行走”或“跳跃”。</li>
-                     <li>如果生成的角色太小，请在左侧调整“画面主体缩放”。</li>
-                     <li>生成的图像默认为白底，工具会自动尝试去除背景。</li>
-                   </ul>
-                </div>
              </div>
           </div>
 

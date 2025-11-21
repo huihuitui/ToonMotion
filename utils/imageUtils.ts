@@ -50,7 +50,7 @@ const getContentBounds = (ctx: CanvasRenderingContext2D, width: number, height: 
   let minX = width, minY = height, maxX = 0, maxY = 0;
   let found = false;
 
-  // Threshold for "content". Assuming white background might remain or transparency.
+  // Threshold for "content". 
   // We treat anything not fully transparent AND not near-white as content.
   const whiteThreshold = 240;
 
@@ -64,7 +64,7 @@ const getContentBounds = (ctx: CanvasRenderingContext2D, width: number, height: 
 
       // Check if pixel is visible
       if (alpha > 20) {
-        // Check if it's NOT white (if we haven't fully removed bg yet, this helps)
+        // Check if it's NOT white (background)
         if (r < whiteThreshold || g < whiteThreshold || b < whiteThreshold) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
@@ -81,21 +81,20 @@ const getContentBounds = (ctx: CanvasRenderingContext2D, width: number, height: 
 };
 
 /**
- * Processes a list of canvas frames:
- * 1. Finds the content bounding box for each frame.
- * 2. Determines the maximum width and height of content across all frames.
- * 3. Creates new uniform canvases and centers the content in them.
- * This fixes "jitter" in animation.
+ * Processes a list of raw grid cells:
+ * 1. Finds the specific character bounds inside each cell (removes inner whitespace).
+ * 2. Determines the max character size across all frames.
+ * 3. Creates new frames where the character is centered and maximized.
  */
-const alignAndCenterFrames = (frames: HTMLCanvasElement[]): string[] => {
-  // 1. Get bounds for all frames
+const alignAndMaximizeFrames = (frames: HTMLCanvasElement[]): string[] => {
+  // 1. Get bounds for all frames (Crop to character)
   const bounds = frames.map(frame => {
     const ctx = frame.getContext('2d');
     if (!ctx) return null;
     return getContentBounds(ctx, frame.width, frame.height);
   });
 
-  // 2. Find max dimensions
+  // 2. Find max dimensions to ensure uniform frame size
   let maxContentW = 0;
   let maxContentH = 0;
   
@@ -106,12 +105,13 @@ const alignAndCenterFrames = (frames: HTMLCanvasElement[]): string[] => {
     }
   });
 
-  // Add some padding
-  const padding = Math.max(20, Math.floor(maxContentW * 0.1));
+  if (maxContentW === 0 || maxContentH === 0) return [];
+
+  // Add very minimal padding (2px) just to avoid edge clipping
+  const padding = 2;
   const finalW = maxContentW + padding * 2;
   const finalH = maxContentH + padding * 2;
 
-  // 3. Center content
   const resultBase64: string[] = [];
 
   frames.forEach((frame, i) => {
@@ -142,147 +142,90 @@ const alignAndCenterFrames = (frames: HTMLCanvasElement[]): string[] => {
 };
 
 /**
- * Smart Slicing with Projection Profile + Auto-centering
- */
-const performSmartSlicing = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, removeBg: boolean): string[] => {
-    const width = canvas.width;
-    const height = canvas.height;
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const data = imageData.data;
-    const threshold = 240;
-
-    // 1. Scan Y (Rows)
-    const rowSegments: {start: number, end: number}[] = [];
-    let inRow = false;
-    let startY = 0;
-
-    const isRowEmpty = (y: number) => {
-        for(let x=0; x<width; x++) {
-            const i = (y*width + x)*4;
-            if (data[i+3] > 20 && (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold)) return false;
-        }
-        return true;
-    };
-
-    for(let y=0; y<height; y++) {
-        const empty = isRowEmpty(y);
-        if (!inRow && !empty) {
-            inRow = true;
-            startY = y;
-        } else if (inRow && (empty || y === height - 1)) {
-            inRow = false;
-            if (y - startY > 10) rowSegments.push({start: startY, end: y});
-        }
-    }
-
-    // 2. Scan X (Cols)
-    const colSegments: {start: number, end: number}[] = [];
-    let inCol = false;
-    let startX = 0;
-
-    const isColEmpty = (x: number) => {
-        for(let y=0; y<height; y++) {
-            const i = (y*width + x)*4;
-            if (data[i+3] > 20 && (data[i] < threshold || data[i+1] < threshold || data[i+2] < threshold)) return false;
-        }
-        return true;
-    };
-
-    for(let x=0; x<width; x++) {
-        const empty = isColEmpty(x);
-        if (!inCol && !empty) {
-            inCol = true;
-            startX = x;
-        } else if (inCol && (empty || x === width - 1)) {
-            inCol = false;
-            if (x - startX > 10) colSegments.push({start: startX, end: x});
-        }
-    }
-
-    if (rowSegments.length === 0 || colSegments.length === 0) return [];
-
-    // 3. Extract Raw Cells
-    const rawCanvases: HTMLCanvasElement[] = [];
-
-    for(const r of rowSegments) {
-        for(const c of colSegments) {
-            const w = c.end - c.start;
-            const h = r.end - r.start;
-            
-            const cellCanvas = document.createElement('canvas');
-            cellCanvas.width = w;
-            cellCanvas.height = h;
-            const cellCtx = cellCanvas.getContext('2d');
-            
-            if (cellCtx) {
-                cellCtx.drawImage(canvas, c.start, r.start, w, h, 0, 0, w, h);
-                
-                if (removeBg) {
-                    const id = cellCtx.getImageData(0, 0, w, h);
-                    const d = id.data;
-                    for(let i=0; i<d.length; i+=4) {
-                         if(d[i]>230 && d[i+1]>230 && d[i+2]>230) d[i+3] = 0;
-                    }
-                    cellCtx.putImageData(id, 0, 0);
-                }
-                rawCanvases.push(cellCanvas);
-            }
-        }
-    }
-
-    // 4. Align and Center
-    return alignAndCenterFrames(rawCanvases);
-};
-
-/**
- * Fallback slicing: Divides by fixed rows/cols but performs auto-centering.
+ * Strict Fixed Grid Slicing.
+ * 1. Finds the global content box of the entire sprite sheet (trims outer margins).
+ * 2. Divides that box into strictly equal rows and columns.
+ * 3. Extracts cells.
+ * 4. Sends to alignAndMaximizeFrames for final polish.
  */
 const performFixedGridSlicing = (canvas: HTMLCanvasElement, rows: number, cols: number, removeBg: boolean): string[] => {
-  // Use the whole canvas, don't trim outer whitespace aggressively first as it might shift the grid.
-  // Actually, for fixed grid, we often need to trim outer margins if the AI put a border.
-  // Let's stick to simple division then center content.
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return [];
+
+  // 1. Trim the sprite sheet first to remove outer whitespace
+  const globalBounds = getContentBounds(ctx, canvas.width, canvas.height);
   
-  const frameWidth = Math.floor(canvas.width / cols);
-  const frameHeight = Math.floor(canvas.height / rows);
+  let sourceX = 0, sourceY = 0;
+  let sourceW = canvas.width, sourceH = canvas.height;
+
+  // If we found content, strictly use that area as the "Grid Area"
+  if (globalBounds) {
+      sourceX = globalBounds.x;
+      sourceY = globalBounds.y;
+      sourceW = globalBounds.w;
+      sourceH = globalBounds.h;
+  }
+
+  // Calculate cell size based on the content area
+  const frameWidth = sourceW / cols;
+  const frameHeight = sourceH / rows;
+  
   const rawCanvases: HTMLCanvasElement[] = [];
+
+  // Safety Shave: How many pixels to clear from edges to avoid neighbor artifacts
+  // We keep this small shave to prevent single-pixel bleeding, but rely on Prompt for main separation.
+  const safetyShave = 4; 
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const cellCanvas = document.createElement('canvas');
-      cellCanvas.width = frameWidth;
-      cellCanvas.height = frameHeight;
-      const ctx = cellCanvas.getContext('2d');
+      // Use ceil to avoid sub-pixel clipping issues
+      cellCanvas.width = Math.ceil(frameWidth);
+      cellCanvas.height = Math.ceil(frameHeight);
+      const cellCtx = cellCanvas.getContext('2d');
 
-      if (ctx) {
-          ctx.drawImage(
+      if (cellCtx) {
+          cellCtx.drawImage(
             canvas,
-            c * frameWidth,
-            r * frameHeight,
+            sourceX + c * frameWidth, // Precision float coordinate
+            sourceY + r * frameHeight,
             frameWidth,
             frameHeight,
             0,
             0,
-            frameWidth,
-            frameHeight
+            cellCanvas.width,
+            cellCanvas.height
           );
 
+          // --- SAFETY CLEANING STEP ---
+          // Shave edges to prevent "feet/head" overlap from neighbors if the AI draws slightly too big
+          cellCtx.clearRect(0, 0, cellCanvas.width, safetyShave); // Top edge
+          cellCtx.clearRect(0, cellCanvas.height - safetyShave, cellCanvas.width, safetyShave); // Bottom edge
+          cellCtx.clearRect(0, 0, safetyShave, cellCanvas.height); // Left edge
+          cellCtx.clearRect(cellCanvas.width - safetyShave, 0, safetyShave, cellCanvas.height); // Right edge
+
+          // NOTE: We removed the specific corner clearing (50x40) for numbers as requested.
+          // We now rely on the AI Prompt to strictly forbid numbers.
+
           if (removeBg) {
-             const imageData = ctx.getImageData(0, 0, frameWidth, frameHeight);
+             const imageData = cellCtx.getImageData(0, 0, cellCanvas.width, cellCanvas.height);
              const data = imageData.data;
              const threshold = 230; 
              for (let i = 0; i < data.length; i += 4) {
+                // Simple white removal
                 if (data[i] > threshold && data[i + 1] > threshold && data[i + 2] > threshold) {
                    data[i + 3] = 0;
                 }
              }
-             ctx.putImageData(imageData, 0, 0);
+             cellCtx.putImageData(imageData, 0, 0);
           }
           rawCanvases.push(cellCanvas);
       }
     }
   }
   
-  return alignAndCenterFrames(rawCanvases);
+  // Send raw grid cells to be cropped and centered
+  return alignAndMaximizeFrames(rawCanvases);
 };
 
 /**
@@ -296,6 +239,7 @@ export const sliceSpriteSheet = (
 ): Promise<string[]> => {
   return new Promise((resolve) => {
     const img = new Image();
+    img.crossOrigin = "anonymous"; // Good practice
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
@@ -306,17 +250,9 @@ export const sliceSpriteSheet = (
       
       ctx.drawImage(img, 0, 0);
 
-      // Try smart slicing first
-      const smartFrames = performSmartSlicing(canvas, ctx, removeBg);
-      
-      // If smart slicing found roughly the expected number of frames (or at least enough to be valid)
-      // We use it.
-      if (smartFrames.length >= Math.floor((rows * cols) * 0.5)) {
-          resolve(smartFrames);
-          return;
-      }
-
-      // Fallback
+      // Force Fixed Grid Slicing. 
+      // Smart slicing causes "two pics in one frame" errors when rows are close.
+      // We trust the AI followed the grid prompt.
       const fixedFrames = performFixedGridSlicing(canvas, rows, cols, removeBg);
       resolve(fixedFrames);
     };
@@ -393,9 +329,14 @@ export const downloadApng = async (frames: string[], fps: number, filename: stri
    let height = 0;
 
    for (const frame of frames) {
-     const img = await loadImage(frame);
-     width = img.width;
-     height = img.height;
+     const frameImg = await loadImage(frame);
+     
+     // Ensure all frames are the same size (they should be from alignAndMaximizeFrames)
+     // But if not, handle it gracefully by creating a new canvas of max dimensions
+     if (width === 0) {
+         width = frameImg.width;
+         height = frameImg.height;
+     }
 
      const canvas = document.createElement('canvas');
      canvas.width = width;
@@ -403,7 +344,7 @@ export const downloadApng = async (frames: string[], fps: number, filename: stri
      const ctx = canvas.getContext('2d');
      if (!ctx) continue;
 
-     ctx.drawImage(img, 0, 0);
+     ctx.drawImage(frameImg, 0, 0, width, height);
      const buffer = ctx.getImageData(0, 0, width, height).data.buffer;
      buffers.push(buffer);
    }

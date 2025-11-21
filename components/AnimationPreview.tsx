@@ -95,7 +95,7 @@ export const AnimationPreview: React.FC<AnimationPreviewProps> = ({ frames, fps,
         <img 
           src={frames[currentFrameIndex]} 
           alt={`Frame ${currentFrameIndex}`} 
-          className="h-full w-full object-contain rendering-pixelated p-4 transition-transform duration-300 group-hover:scale-105" 
+          className="h-full w-full object-contain rendering-pixelated transition-transform duration-300 group-hover:scale-105" 
           style={{ imageRendering: 'pixelated' }}
         />
       </div>
